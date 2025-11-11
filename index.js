@@ -86,8 +86,9 @@ app.use((req, res, next) => {
 // 🎯 Webhook Handler
 app.post('/webhooks/wuilt', async (req, res) => {
   try {
-    const event = req.body.event;
-    const payload = req.body.payload;
+    const data = req.body.data;
+    const event = data?.event;
+    const payload = data?.payload;
 
     res.status(200).json({ status: 'OK', message: 'Received', timestamp: new Date().toISOString() });
     if (!event || !payload) return console.log('⚠️ Invalid webhook data');
@@ -111,6 +112,32 @@ app.post('/webhooks/wuilt', async (req, res) => {
     console.error('❌ Webhook Error:', error);
   }
 });
+
+// 🛍️ New Order
+async function handleOrderPlaced(order) {
+  try {
+    if (!order?.customer || !order?.shippingAddress) return;
+    const customerName = order.customer.name;
+    const customerPhone = formatPhone(order.shippingAddress.phone);
+    if (!customerPhone) return;
+
+    const orderId = order._id;
+    const orderNumber = order.orderSerial;
+    const totalAmount = order.totalPrice.amount;
+
+    storeCustomerPhone(orderId, customerPhone, customerName);
+
+    const message = `مرحبًا ${customerName} 💛
+تم استلام طلبك رقم #${orderNumber} من Pineapple EG بنجاح
+
+إجمالي الطلب: ${totalAmount} EGP
+شكرًا لاختيارك Pineapple EG`;
+
+    await sendWhatsApp(customerPhone, message, customerName);
+  } catch (error) {
+    console.error('❌ Error in handleOrderPlaced:', error);
+  }
+}
 
 // 🛍️ New Order
 async function handleOrderPlaced(order) {
