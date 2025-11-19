@@ -189,11 +189,12 @@ for (const e of events) {
 شكرًا لثقتك في Pineapple EG`;
     await sendWhatsApp(customerPhone, msg, customerName);
   } else if (e === 'OrderShipmentDelivered') {
-    const msg = `تم تسليم طلبك من Pineapple EG بنجاح 🎉
+    const msg = `
+ شكرا لثقتك فى 🍍 Pineapple
+يارب يكون الاوردر عجب حضرتك 🙏
+رايك يهمنا 💛
 
-نتمنى تكون المنتجات عجبتك وتعيش بيها أحلى تجربة ❤
-
-شكرًا لثقتك في Pineapple EG`;
+https://pineappleeg.com`;
     await sendWhatsApp(customerPhone, msg, customerName);
   }
 }
