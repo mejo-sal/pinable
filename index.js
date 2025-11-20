@@ -30,10 +30,15 @@ app.use((req, res, next) => {
 const STORAGE_FILE = './customer_phones.json';
 const WEBHOOK_LOG_FILE = './webhook_logs.json';
 
+// ⭐ NEW FILE FOR PICKUP EVENT DUPLICATE CONTROL
+const PICKUP_FILE = './pickup_status.json';
+
 // Initialize storage
 let customerPhones = {};
 let webhookLogs = {};
+let pickupStatus = {}; // NEW
 
+// Load existing data
 function loadStorageData() {
   try {
     if (fs.existsSync(STORAGE_FILE)) {
@@ -49,11 +54,25 @@ function loadStorageData() {
     customerPhones = {};
     webhookLogs = {};
   }
+
+  // Load pickup status (NEW)
+  try {
+    if (fs.existsSync(PICKUP_FILE)) {
+      pickupStatus = JSON.parse(fs.readFileSync(PICKUP_FILE, 'utf8'));
+      console.log(`🚚 Loaded pickup statuses: ${Object.keys(pickupStatus).length}`);
+    }
+  } catch {
+    pickupStatus = {};
+  }
 }
 
 function saveStorageData() {
   fs.writeFileSync(STORAGE_FILE, JSON.stringify(customerPhones, null, 2));
   fs.writeFileSync(WEBHOOK_LOG_FILE, JSON.stringify(webhookLogs, null, 2));
+}
+
+function savePickupStatus() {
+  fs.writeFileSync(PICKUP_FILE, JSON.stringify(pickupStatus, null, 2));
 }
 
 loadStorageData();
@@ -82,6 +101,16 @@ app.use((req, res, next) => {
     console.log('📦 Parsed Body:', JSON.stringify(req.body, null, 2));
   next();
 });
+
+// ⭐ NEW: CHECK IF PICKUP WAS ALREADY SENT
+function isPickupSent(orderSerial) {
+  return pickupStatus[orderSerial] === true;
+}
+
+function markPickupSent(orderSerial) {
+  pickupStatus[orderSerial] = true;
+  savePickupStatus();
+}
 
 // 🎯 Webhook Handler
 app.post('/webhooks/wuilt', async (req, res) => {
@@ -139,32 +168,6 @@ async function handleOrderPlaced(order) {
   }
 }
 
-// 🛍️ New Order
-async function handleOrderPlaced(order) {
-  try {
-    if (!order?.customer || !order?.shippingAddress) return;
-    const customerName = order.customer.name;
-    const customerPhone = formatPhone(order.shippingAddress.phone);
-    if (!customerPhone) return;
-
-    const orderId = order._id;
-    const orderNumber = order.orderSerial;
-    const totalAmount = order.totalPrice.amount;
-
-    storeCustomerPhone(orderId, customerPhone, customerName);
-
-    const message = `مرحبًا ${customerName} 💛
-تم استلام طلبك رقم #${orderNumber} من Pineapple EG بنجاح
-
-إجمالي الطلب: ${totalAmount} EGP
-شكرًا لاختيارك Pineapple EG`;
-
-    await sendWhatsApp(customerPhone, message, customerName);
-  } catch (error) {
-    console.error('❌ Error in handleOrderPlaced:', error);
-  }
-}
-
 // 🚚 Shipment Update
 async function handleShipmentUpdate(payload) {
   try {
@@ -172,32 +175,47 @@ async function handleShipmentUpdate(payload) {
     if (!order || !events) return;
 
     const orderId = order.orderId;
+    const orderSerial = order.orderSerial;
     const customerPhone = getCustomerPhone(orderId);
     if (!customerPhone) return;
 
     const customerName = customerPhones[orderId]?.name || 'العميل';
-    const orderNumber = order.orderSerial;
     const shippingCompany = order.companyName || order.shippingRateName || 'شركة الشحن';
 
-for (const e of events) {
-  if (e === 'OrderShipmentPickedUp') {
-    const msg = `تم تسليم طلبك رقم #${orderNumber} لشركة الشحن:
+    for (const e of events) {
+
+      // ⭐ منع التكرار لحدث البيك-اب فقط
+      if (e === 'OrderShipmentPickedUp') {
+
+        if (isPickupSent(orderSerial)) {
+          console.log(`⛔ Pickup already sent for order #${orderSerial}`);
+          continue;
+        }
+
+        const msg = `تم تسليم طلبك رقم #${orderSerial} لشركة الشحن:
 شركة: ${shippingCompany} 🚚
 رابط التتبع: https://bosta.co/tracking/${order.trackingNumber}
 إمكانية فتح الشحنة: نعم ✅
 
 شكرًا لثقتك في Pineapple EG`;
-    await sendWhatsApp(customerPhone, msg, customerName);
-  } else if (e === 'OrderShipmentDelivered') {
-    const msg = `
+
+        await sendWhatsApp(customerPhone, msg, customerName);
+
+        // ⭐ سجلنا إن الرسالة اتبعت
+        markPickupSent(orderSerial);
+      }
+
+      else if (e === 'OrderShipmentDelivered') {
+        const msg = `
  شكرا لثقتك فى 🍍 Pineapple
 يارب يكون الاوردر عجب حضرتك 🙏
 رايك يهمنا 💛
 
 https://pineappleeg.com`;
-    await sendWhatsApp(customerPhone, msg, customerName);
-  }
-}
+
+        await sendWhatsApp(customerPhone, msg, customerName);
+      }
+    }
 
   } catch (error) {
     console.error('❌ Error in handleShipmentUpdate:', error);
@@ -213,7 +231,6 @@ async function handleOrderCancel(order) {
 
     const orderId = order._id;
     const orderNumber = order.orderSerial;
-    const totalAmount = order.totalPrice.amount;
 
     const msg = `مرحبًا ${customerName} 💛
 
@@ -275,7 +292,8 @@ app.get('/health', (req, res) => {
     whatsapp: client.info ? 'Connected' : 'Connecting',
     storage: {
       customerPhones: Object.keys(customerPhones).length,
-      webhookLogs: Object.keys(webhookLogs).length
+      webhookLogs: Object.keys(webhookLogs).length,
+      pickupSent: Object.keys(pickupStatus).length
     }
   });
 });
@@ -291,14 +309,13 @@ app.listen(PORT, () => {
 📍 Port: ${PORT}
 📞 Webhook: POST http://localhost:${PORT}/webhooks/wuilt
 ❤️ Health: GET http://localhost:${PORT}/health
-💾 Storage: ${Object.keys(customerPhones).length} customers
-  `);
+💾 Storage: ${Object.keys(customerPhones).length} customers`);
 });
 
-// Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('🔄 Shutting down Pineapple bot...');
   saveStorageData();
+  savePickupStatus();
   await client.destroy();
   process.exit(0);
 });
